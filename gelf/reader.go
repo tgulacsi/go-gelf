@@ -17,7 +17,7 @@ import (
 )
 
 type Reader struct {
-	mu sync.Mutex
+	mu   sync.Mutex
 	conn net.Conn
 }
 
@@ -75,7 +75,7 @@ func (r *Reader) ReadMessage() (*Message, error) {
 	if bytes.Equal(cHead, magicGzip) {
 		cReader, err = gzip.NewReader(bytes.NewReader(cBuf))
 	} else if cHead[0] == magicZlib[0] &&
-		(int(cHead[0]) * 256 + int(cHead[1])) % 31 == 0 {
+		(int(cHead[0])*256+int(cHead[1]))%31 == 0 {
 		// zlib is slightly more complicated, but correct
 		cReader, err = zlib.NewReader(bytes.NewReader(cBuf))
 	} else {

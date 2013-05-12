@@ -6,9 +6,9 @@ package gelf
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
-	"compress/flate"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -45,34 +45,35 @@ const (
 
 // Message represents the contents of the GELF message.  It is gzipped
 // before sending.
-//
-// TODO: support optional ('_'-prefixed) fields?
 type Message struct {
-	Version  string `json:"version"`
-	Host     string `json:"host"`
-	Short    string `json:"short_message"`
-	Full     string `json:"full_message"`
-	TimeUnix int64  `json:"timestamp"`
-	Level    int32  `json:"level"`
-	Facility string `json:"facility"`
-	File     string `json:"file"`
-	Line     int    `json:"line"`
+	Version  string                 `json:"version"`
+	Host     string                 `json:"host"`
+	Short    string                 `json:"short_message"`
+	Full     string                 `json:"full_message"`
+	TimeUnix int64                  `json:"timestamp"`
+	Level    int32                  `json:"level"`
+	Facility string                 `json:"facility"`
+	File     string                 `json:"file"`
+	Line     int                    `json:"line"`
+	Extra    map[string]interface{} `json:"-"`
 }
+
+type innerMessage Message //against circular (Un)MarshalJSON
 
 // Used to control GELF chunking.  Should be less than (MTU - len(UDP
 // header)).
 //
 // TODO: generate dynamically using Path MTU Discovery?
 const (
-	ChunkSize = 1420
+	ChunkSize        = 1420
 	chunkedHeaderLen = 12
-	chunkedDataLen = ChunkSize - chunkedHeaderLen
+	chunkedDataLen   = ChunkSize - chunkedHeaderLen
 )
 
 var (
 	magicChunked = []byte{0x1e, 0x0f}
-	magicZlib = []byte{0x78}
-	magicGzip = []byte{0x1f, 0x8b}
+	magicZlib    = []byte{0x78}
+	magicGzip    = []byte{0x1f, 0x8b}
 )
 
 // numChunks returns the number of GELF chunks necessary to transmit
@@ -141,8 +142,8 @@ func (w *Writer) writeChunked(zBytes []byte) (err error) {
 		if chunkLen > bytesLeft {
 			chunkLen = bytesLeft
 		}
-		off := int(i)*chunkedDataLen
-		chunk := zBytes[off:off+chunkLen]
+		off := int(i) * chunkedDataLen
+		chunk := zBytes[off : off+chunkLen]
 		buf.Write(chunk)
 
 		// write this chunk, and make sure the write was good
@@ -288,6 +289,7 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 		Facility: w.Facility,
 		File:     file,
 		Line:     line,
+		Extra:    map[string]interface{}{"_a": "b", "C": 9},
 	}
 
 	if err = w.WriteMessage(&m); err != nil {
@@ -295,4 +297,65 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 	}
 
 	return len(p), nil
+}
+
+func (m *Message) MarshalJSON() ([]byte, error) {
+	var err error
+	var b, eb []byte
+	if len(m.Extra) > 0 {
+		if eb, err = json.Marshal(m.Extra); err != nil {
+			return nil, err
+		}
+	}
+	extra := m.Extra
+	im := (*innerMessage)(m)
+	im.Extra = nil
+	if b, err = json.Marshal(im); err != nil {
+		m.Extra = extra
+		return b, err
+	}
+	if extra != nil && len(extra) > 0 && len(eb) > 0 {
+		m.Extra = extra
+		//fmt.Printf("b=%s\neb=%s\n", b, eb)
+		return append(append(b[:len(b)-1], ','), eb[1:len(eb)]...), nil
+	}
+	return b, nil
+}
+
+func (m *Message) UnmarshalJSON(data []byte) error {
+	i := make(map[string]interface{}, 16)
+	if err := json.Unmarshal(data, &i); err != nil {
+		return err
+	}
+	for k, v := range i {
+		//fmt.Printf("%s: %v\n", k, v)
+		if k[0] == '_' {
+			if m.Extra == nil {
+				m.Extra = make(map[string]interface{}, 1)
+			}
+			m.Extra[k] = v
+			continue
+		}
+		switch k {
+		case "version":
+			m.Version = v.(string)
+		case "host":
+			m.Host = v.(string)
+		case "short_message":
+			m.Short = v.(string)
+		case "full_message":
+			m.Full = v.(string)
+		case "timestamp":
+			m.TimeUnix = int64(v.(float64))
+		case "level":
+			m.Level = int32(v.(float64))
+		case "facility":
+			m.Facility = v.(string)
+		case "file":
+			m.File = v.(string)
+		case "line":
+			m.Line = int(v.(float64))
+		}
+	}
+	return nil
 }
