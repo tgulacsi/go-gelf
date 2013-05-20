@@ -68,8 +68,6 @@ server is reachable or not.
 To Do
 -----
 
-- Custom fields
-- Tests for chunked messages
 - WriteMessage example
 
 License

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewWriter(t *testing.T) {
@@ -33,6 +34,25 @@ func sendAndRecv(msgData string, compress CompressType) (*Message, error) {
 	w.CompressionType = compress
 
 	if _, err = w.Write([]byte(msgData)); err != nil {
+		return nil, fmt.Errorf("w.Write: %s", err)
+	}
+
+	return r.ReadMessage()
+}
+
+func sendAndRecvMsg(msg *Message, compress CompressType) (*Message, error) {
+	r, err := NewReader("127.0.0.1:0")
+	if err != nil {
+		return nil, fmt.Errorf("NewReader: %s", err)
+	}
+
+	w, err := NewWriter(r.Addr())
+	if err != nil {
+		return nil, fmt.Errorf("NewWriter: %s", err)
+	}
+	w.CompressionType = compress
+
+	if err = w.WriteMessage(msg); err != nil {
 		return nil, fmt.Errorf("w.Write: %s", err)
 	}
 
@@ -96,6 +116,12 @@ func TestWriteSmallOneLine(t *testing.T) {
 	if !strings.HasSuffix(msg.File, fileExpected) {
 		t.Errorf("msg.File: expected %s, got %s", fileExpected,
 			msg.File)
+		return
+	}
+
+	if len(msg.Extra) != 0 {
+		t.Errorf("extra extra fields in %v (expect empty)", msg.Extra)
+		return
 	}
 }
 
@@ -106,9 +132,14 @@ func TestGetCaller(t *testing.T) {
 		return
 	}
 
+	file, _ = getCaller(0)
+	if !strings.HasSuffix(file, "/gelf/writer_test.go") {
+		t.Errorf("not writer_test.go 1? %s", file)
+	}
+
 	file, _ = getCallerIgnoringLogMulti(0)
 	if !strings.HasSuffix(file, "/gelf/writer_test.go") {
-		t.Errorf("not writer_test.go? %s", file)
+		t.Errorf("not writer_test.go 2? %s", file)
 	}
 }
 
@@ -146,4 +177,58 @@ func TestWriteBigChunked(t *testing.T) {
 	}
 }
 
-// tests single-message (non-chunked) messages that are a single line long
+// tests messages with extra data
+func TestExtraData(t *testing.T) {
+
+	// time.Now().Unix() seems fine, UnixNano() won't roundtrip
+	// through string -> float64 -> int64
+	extra := map[string]interface{}{"_a": 10 * time.Now().Unix(), "C": 9}
+
+	short := "quick"
+	full := short + "\nwith more detail"
+	m := Message{
+		Version:  "1.0",
+		Host:     "fake-host",
+		Short:    string(short),
+		Full:     string(full),
+		TimeUnix: time.Now().Unix(),
+		Level:    6, // info
+		Facility: "writer_test",
+		File:     "writer_test.go",
+		Line:     186,
+		Extra:    extra,
+	}
+
+	for _, i := range []CompressType{CompressGzip, CompressZlib} {
+		msg, err := sendAndRecvMsg(&m, i)
+		if err != nil {
+			t.Errorf("sendAndRecv: %s", err)
+			return
+		}
+
+		if msg.Short != short {
+			t.Errorf("msg.Short: expected %s, got %s", short, msg.Full)
+			return
+		}
+
+		if msg.Full != full {
+			t.Errorf("msg.Full: expected %s, got %s", full, msg.Full)
+			return
+		}
+
+		if msg.File != "writer_test.go" {
+			t.Errorf("msg.File: expected writer_test.go, got %s", msg.File)
+			return
+		}
+
+		if len(msg.Extra) != 1 {
+			t.Errorf("extra extra fields in %v", msg.Extra)
+			return
+		}
+
+		if int64(msg.Extra["_a"].(float64)) != extra["_a"].(int64) {
+			t.Errorf("_a didn't roundtrip (%v != %v)", int64(msg.Extra["_a"].(float64)), extra["_a"].(int64))
+			return
+		}
+	}
+}
