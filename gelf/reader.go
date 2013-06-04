@@ -16,11 +16,13 @@ import (
 	"sync"
 )
 
+// Reader wraps the net connection as an io.Reader
 type Reader struct {
 	mu   sync.Mutex
 	conn net.Conn
 }
 
+// NewReader returns a new io.Reader for the given UDP address
 func NewReader(addr string) (*Reader, error) {
 	var err error
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
@@ -38,10 +40,12 @@ func NewReader(addr string) (*Reader, error) {
 	return r, nil
 }
 
+// Addr returns the connection address
 func (r *Reader) Addr() string {
 	return r.conn.LocalAddr().String()
 }
 
+// Read implements the io.Reader interface
 // FIXME: this will discard data if p isn't big enough to hold the
 // full message.
 func (r *Reader) Read(p []byte) (int, error) {
@@ -61,6 +65,7 @@ func (r *Reader) Read(p []byte) (int, error) {
 	return strings.NewReader(data).Read(p)
 }
 
+// ReadMessage reads a message
 func (r *Reader) ReadMessage() (*Message, error) {
 	cBuf := make([]byte, ChunkSize)
 	var (
